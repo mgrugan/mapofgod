@@ -31,7 +31,7 @@ python3 -m http.server 8000
 ```
 
 (You need a server rather than opening the file directly, because the page
-fetches `data/stars.bin` — browsers block `fetch` from `file://`.)
+fetches `data/stars.b64` — browsers block `fetch` from `file://`.)
 
 ## Controls
 
@@ -46,7 +46,7 @@ fetches `data/stars.bin` — browsers block `fetch` from `file://`.)
 ```
 index.html              The website (UI, styling, three.js import map)
 js/main.js              Scene setup, data loading, shaders, interaction
-data/stars.bin          Packed star data (float32: x,y,z, r,g,b, size)
+data/stars.b64          Packed star data (float32: x,y,z, r,g,b, size)
 data/stars.json         Metadata + named bright stars (for labels/search)
 scripts/process_stars.py  Rebuilds the data files from the raw HYG catalog
 ```

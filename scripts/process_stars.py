@@ -3,8 +3,12 @@
 Process the HYG star database into a compact binary file for the web map.
 
 Input : scripts/hygdata_v41.csv  (the HYG v4.1 catalog from astronexus/HYG-Database)
-Output: data/stars.bin           (packed Float32 records, little-endian)
+Output: data/stars.b64           (base64 of packed little-endian Float32 records)
         data/stars.json          (metadata + named bright stars for labels)
+
+The star records are base64 text (not raw binary) so the data file is a plain
+ASCII asset that hosts and tooling handle cleanly; the browser decodes it back
+to a Float32Array at load time.
 
 Each star in stars.bin is 7 little-endian float32 values:
     x, y, z   -> position in parsecs (galactic-ish equatorial cartesian)
@@ -18,12 +22,13 @@ import csv
 import json
 import struct
 import math
+import base64
 import os
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 SRC = os.path.join(HERE, "hygdata_v41.csv")
-OUT_BIN = os.path.join(ROOT, "data", "stars.bin")
+OUT_B64 = os.path.join(ROOT, "data", "stars.b64")
 OUT_JSON = os.path.join(ROOT, "data", "stars.json")
 
 # Keep stars out to this distance (parsecs). The HYG catalog gets sparse and
@@ -117,8 +122,8 @@ def main():
                     "con": (row.get("con") or "").strip(),
                 })
 
-    with open(OUT_BIN, "wb") as f:
-        f.write(records)
+    with open(OUT_B64, "w") as f:
+        f.write(base64.b64encode(bytes(records)).decode("ascii"))
 
     named.sort(key=lambda s: s["mag"])
     meta = {
@@ -134,7 +139,7 @@ def main():
     with open(OUT_JSON, "w") as f:
         json.dump(meta, f)
 
-    print(f"Wrote {count} stars to {OUT_BIN} ({len(records)} bytes)")
+    print(f"Wrote {count} stars to {OUT_B64} ({len(records)} raw bytes)")
     print(f"Wrote metadata + {len(named)} named stars to {OUT_JSON}")
 
 

@@ -88,18 +88,22 @@ function addReferenceMarkers() {
 }
 
 async function loadStars() {
-  const [binResp, metaResp] = await Promise.all([
-    fetch("data/stars.bin"),
+  const [b64Resp, metaResp] = await Promise.all([
+    fetch("data/stars.b64"),
     fetch("data/stars.json"),
   ]);
-  if (!binResp.ok) throw new Error("stars.bin " + binResp.status);
+  if (!b64Resp.ok) throw new Error("stars.b64 " + b64Resp.status);
   if (!metaResp.ok) throw new Error("stars.json " + metaResp.status);
 
-  const buf = await binResp.arrayBuffer();
+  // Star records ship as base64 text; decode back to a Float32Array.
+  const b64 = (await b64Resp.text()).trim();
   meta = await metaResp.json();
   named = meta.named || [];
 
-  const data = new Float32Array(buf);
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  const data = new Float32Array(bytes.buffer);
   const n = data.length / STRIDE;
 
   const positions = new Float32Array(n * 3);
