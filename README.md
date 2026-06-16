@@ -1,9 +1,11 @@
-# 🌌 Map of the Universe
+# 🌌 Map of God
 
-An interactive **3D map of nearby stars**, built from real astronomical data and
-rendered in the browser with [three.js](https://threejs.org/). It's a plain
-static website — open `index.html` and you can fly through ~25,000 real stars,
-each placed at its true position in space and coloured by its real temperature.
+A cinematic, interconnected **3D atlas of the real stars**, built from real
+astronomical data and rendered in the browser with
+[three.js](https://threejs.org/) + bloom post-processing. It's a plain static
+website — open `index.html` and you fly through ~25,000 real stars, woven into a
+glowing cosmic web, then **click any star to descend into it** and watch its
+worlds circle it on clean orbital rings.
 
 ## What you're looking at
 
@@ -35,11 +37,22 @@ fetches `data/stars.b64` — browsers block `fetch` from `file://`.)
 
 ## Controls
 
-- **Drag** — orbit the view
-- **Scroll** — zoom in/out
+- **Drag** — orbit the heavens (the view also drifts slowly on its own)
+- **Scroll** — draw near / pull back
 - **Right-drag** — pan
-- **Hover** a bright star — see its name
-- **Search box** — type a name (Sirius, Vega, Betelgeuse…) and click to fly there
+- **Hover** any star — a targeting reticle locks on and shows its name & distance
+- **Click** any star — *descend* into its system: the camera flies in and a clean
+  orbital solar system of worlds appears, circling the star
+- **Ascend** button (or **Esc**) — return to the full map of the heavens
+- **Search box** — type a name (Sirius, Vega, Rigel…) and click to dive straight in
+
+### About the solar systems
+
+We don't yet have confirmed planets for most stars, so each system is generated
+*procedurally but deterministically* from the star's own position — the same star
+always yields the same worlds. It's an artistic, futuristic impression of "every
+star a sun with worlds", not a catalog of real exoplanets. Real exoplanet data
+(NASA Exoplanet Archive) is a natural next step — see below.
 
 ## Project layout
 
@@ -79,6 +92,8 @@ This maps the *stars* of our local galaxy. The same technique scales outward:
 - **Galaxies** — pull redshifts from NASA/IPAC **NED** or **SDSS** and convert
   redshift → distance to map the cosmic web of galaxies and voids.
 - **The Milky Way's shape** — add a billion-star layer from ESA **Gaia**.
+- **Real worlds** — replace the procedural systems with confirmed planets from the
+  **NASA Exoplanet Archive** for stars that have them.
 - **Labels & constellations**, time-based proper motion, and search by catalog ID.
 
 ## Data credit

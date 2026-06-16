@@ -3,125 +3,250 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Map of the Universe — 3D Star Map</title>
+    <title>Map of God — A 3D Atlas of the Heavens</title>
     <meta
       name="description"
-      content="An interactive 3D map of nearby stars built from the real HYG astronomical catalog."
+      content="A cinematic, interconnected 3D atlas of the real stars — dive into any star and watch its worlds orbit."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&family=Rajdhani:wght@300;400;500;600&display=swap"
+      rel="stylesheet"
     />
     <style>
       :root {
-        --fg: #e8ecff;
-        --muted: #8893b8;
-        --panel: rgba(10, 14, 32, 0.78);
-        --border: rgba(120, 150, 255, 0.18);
+        --fg: #dfeaff;
+        --muted: #7f8db8;
+        --accent: #6c7bff;
+        --accent2: #9be8ff;
+        --gold: #ffe9a8;
+        --panel: rgba(8, 12, 28, 0.55);
+        --border: rgba(120, 160, 255, 0.22);
+        --glow: 0 0 24px rgba(108, 123, 255, 0.25);
       }
       * { box-sizing: border-box; }
       html, body {
         margin: 0;
         height: 100%;
-        background: #000005;
+        background: #02030a;
         color: var(--fg);
-        font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+        font-family: "Rajdhani", system-ui, sans-serif;
         overflow: hidden;
+        cursor: crosshair;
       }
       canvas { display: block; }
 
+      /* faint vignette + scan tint over the whole scene */
+      #vignette {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 5;
+        box-shadow: inset 0 0 360px rgba(0, 0, 0, 0.85);
+        background:
+          radial-gradient(120% 120% at 50% 0%, rgba(40, 60, 140, 0.05), transparent 60%);
+      }
+      /* thin corner brackets for a HUD frame */
+      .corner {
+        position: fixed;
+        width: 26px;
+        height: 26px;
+        border: 1px solid var(--border);
+        z-index: 6;
+        pointer-events: none;
+      }
+      .corner.tl { top: 14px; left: 14px; border-right: 0; border-bottom: 0; }
+      .corner.tr { top: 14px; right: 14px; border-left: 0; border-bottom: 0; }
+      .corner.bl { bottom: 14px; left: 14px; border-right: 0; border-top: 0; }
+      .corner.br { bottom: 14px; right: 14px; border-left: 0; border-top: 0; }
+
       #title {
         position: fixed;
-        top: 18px;
-        left: 20px;
+        top: 26px;
+        left: 34px;
         z-index: 10;
         pointer-events: none;
       }
       #title h1 {
         margin: 0;
-        font-size: 20px;
-        font-weight: 600;
-        letter-spacing: 0.5px;
+        font-family: "Orbitron", sans-serif;
+        font-size: 22px;
+        font-weight: 700;
+        letter-spacing: 4px;
+        background: linear-gradient(90deg, var(--gold), var(--accent2));
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+        text-shadow: var(--glow);
       }
       #title p {
-        margin: 4px 0 0;
-        font-size: 12px;
+        margin: 6px 0 0;
+        font-size: 13px;
+        letter-spacing: 3px;
+        text-transform: uppercase;
         color: var(--muted);
       }
 
-      #panel {
-        position: fixed;
-        top: 18px;
-        right: 20px;
-        z-index: 10;
-        width: 260px;
+      .panel {
         background: var(--panel);
         border: 1px solid var(--border);
-        border-radius: 12px;
-        padding: 14px;
-        backdrop-filter: blur(8px);
+        border-radius: 4px;
+        backdrop-filter: blur(10px);
+        box-shadow: var(--glow);
+      }
+
+      #searchWrap {
+        position: fixed;
+        top: 26px;
+        right: 34px;
+        z-index: 10;
+        width: 288px;
+        padding: 12px;
       }
       #search {
         width: 100%;
-        padding: 8px 10px;
-        border-radius: 8px;
+        padding: 9px 12px;
+        border-radius: 3px;
         border: 1px solid var(--border);
-        background: rgba(0, 0, 0, 0.4);
+        background: rgba(0, 0, 0, 0.35);
         color: var(--fg);
-        font-size: 13px;
+        font-family: "Rajdhani", sans-serif;
+        font-size: 15px;
+        letter-spacing: 1px;
         outline: none;
       }
+      #search:focus { border-color: var(--accent); }
       #search::placeholder { color: var(--muted); }
-      #results { margin-top: 8px; max-height: 280px; overflow-y: auto; }
+      #results { margin-top: 6px; max-height: 46vh; overflow-y: auto; }
       .result {
-        padding: 7px 9px;
-        font-size: 12px;
-        border-radius: 7px;
+        padding: 8px 10px;
+        font-size: 14px;
+        letter-spacing: 0.5px;
+        border-radius: 3px;
         cursor: pointer;
         color: var(--muted);
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
       }
       .result:hover {
-        background: rgba(120, 150, 255, 0.14);
+        background: rgba(108, 123, 255, 0.15);
         color: var(--fg);
       }
+      .result .con { color: var(--accent); font-size: 12px; }
 
-      #hud {
-        display: none;
+      /* bottom-left readout HUD */
+      #readout {
         position: fixed;
-        bottom: 16px;
-        left: 20px;
+        bottom: 30px;
+        left: 34px;
         z-index: 10;
-        font-size: 12px;
-        color: var(--muted);
+        min-width: 240px;
+        max-width: 340px;
+        padding: 14px 16px;
+        font-size: 14px;
+      }
+      #readout .label {
+        font-family: "Orbitron", sans-serif;
+        font-size: 10px;
+        letter-spacing: 3px;
+        color: var(--accent);
+        text-transform: uppercase;
+      }
+      #readout .big {
+        font-size: 20px;
+        letter-spacing: 1px;
+        margin: 4px 0 2px;
+        color: var(--fg);
+      }
+      #readout .rows { margin-top: 8px; color: var(--muted); font-size: 13px; }
+      #readout .rows div { display: flex; justify-content: space-between; gap: 16px; }
+      #readout .rows b { color: var(--accent2); font-weight: 500; }
+
+      /* bottom-center controls / breadcrumb */
+      #dock {
+        position: fixed;
+        bottom: 30px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 10;
+        display: flex;
+        gap: 10px;
+        align-items: center;
+      }
+      .btn {
+        padding: 9px 16px;
+        font-family: "Orbitron", sans-serif;
+        font-size: 11px;
+        letter-spacing: 2px;
+        color: var(--fg);
         background: var(--panel);
         border: 1px solid var(--border);
-        border-radius: 10px;
-        padding: 10px 14px;
-        max-width: 360px;
+        border-radius: 3px;
+        backdrop-filter: blur(10px);
+        cursor: pointer;
+        text-transform: uppercase;
+        transition: all 0.2s;
       }
-      #hud b { color: var(--fg); }
+      .btn:hover { border-color: var(--accent); color: var(--accent2); }
+      .btn.hidden { display: none; }
+      #hint {
+        font-size: 13px;
+        letter-spacing: 1px;
+        color: var(--muted);
+        padding: 9px 14px;
+      }
 
       #tooltip {
         display: none;
         position: fixed;
         z-index: 20;
         pointer-events: none;
-        background: rgba(8, 10, 26, 0.92);
+        background: rgba(6, 9, 22, 0.9);
         border: 1px solid var(--border);
-        border-radius: 8px;
-        padding: 8px 10px;
-        font-size: 12px;
-        line-height: 1.4;
+        border-left: 2px solid var(--accent);
+        border-radius: 3px;
+        padding: 8px 11px;
+        font-size: 13px;
+        letter-spacing: 0.5px;
+        line-height: 1.5;
         white-space: nowrap;
+        box-shadow: var(--glow);
       }
+      #tooltip .name { font-family: "Orbitron", sans-serif; font-size: 13px; color: var(--gold); }
+      #tooltip .sub { color: var(--muted); font-size: 12px; }
 
       #loading {
         position: fixed;
         inset: 0;
         display: flex;
+        flex-direction: column;
         align-items: center;
         justify-content: center;
         z-index: 30;
-        font-size: 14px;
-        color: var(--muted);
-        letter-spacing: 1px;
+        background: #02030a;
+        gap: 18px;
       }
+      #loading .ring {
+        width: 46px;
+        height: 46px;
+        border: 2px solid rgba(108, 123, 255, 0.2);
+        border-top-color: var(--accent2);
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+      }
+      #loading span {
+        font-family: "Orbitron", sans-serif;
+        font-size: 12px;
+        letter-spacing: 4px;
+        color: var(--muted);
+        text-transform: uppercase;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+
+      ::-webkit-scrollbar { width: 6px; }
+      ::-webkit-scrollbar-thumb { background: rgba(108,123,255,0.3); border-radius: 3px; }
     </style>
 
     <script type="importmap">
@@ -134,24 +259,42 @@
     </script>
   </head>
   <body>
+    <div id="vignette"></div>
+    <div class="corner tl"></div>
+    <div class="corner tr"></div>
+    <div class="corner bl"></div>
+    <div class="corner br"></div>
+
     <div id="title">
-      <h1>🌌 Map of the Universe</h1>
-      <p>Real stars from the HYG catalog · positions in parsecs</p>
+      <h1>MAP OF GOD</h1>
+      <p>A living atlas of the heavens</p>
     </div>
 
-    <div id="panel">
-      <input id="search" type="text" placeholder="Search a star (e.g. Sirius, Vega)…" autocomplete="off" />
+    <div id="searchWrap" class="panel">
+      <input id="search" type="text" placeholder="Seek a star — Sirius, Vega, Rigel…" autocomplete="off" />
       <div id="results"></div>
     </div>
 
-    <div id="hud">
-      Showing <b id="count">0</b> stars within ~2,000 parsecs of the Sun.
-      <b>Drag</b> to orbit · <b>Scroll</b> to zoom · <b>Right-drag</b> to pan ·
-      hover a bright star for its name.
+    <div id="readout" class="panel">
+      <div class="label">Domain</div>
+      <div class="big" id="ro-title">The Local Heavens</div>
+      <div class="rows" id="ro-rows">
+        <div><span>Stars charted</span><b id="ro-count">—</b></div>
+        <div><span>Span</span><b>~2,000 parsecs</b></div>
+      </div>
+    </div>
+
+    <div id="dock">
+      <button id="backBtn" class="btn hidden">◄ Ascend to the Heavens</button>
+      <div id="hint" class="panel">Drag to behold · Scroll to draw near · <b>Click a star</b> to descend</div>
     </div>
 
     <div id="tooltip"></div>
-    <div id="loading">Loading the stars…</div>
+
+    <div id="loading">
+      <div class="ring"></div>
+      <span>Charting the heavens…</span>
+    </div>
 
     <script type="module" src="js/main.js"></script>
   </body>
