@@ -73,6 +73,16 @@ const clock = new THREE.Clock();
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 
+// cinematic state
+let bloomPass = null;
+let nebula = null;
+const BASE_FOV = 60;
+const BASE_BLOOM = 0.8;
+let pulse = 0; // brief flash of bloom + FOV on transitions
+const parTarget = { x: 0, y: 0 }; // mouse-parallax target (-1..1)
+let parX = 0, parY = 0;
+let intro = false; // suppress auto-rotate etc. during the opening reveal
+
 // reticle that highlights the hovered star
 let reticle;
 
@@ -89,14 +99,13 @@ async function setupBloom() {
       ]);
     composer = new EffectComposer(renderer);
     composer.addPass(new RenderPass(scene, camera));
-    composer.addPass(
-      new UnrealBloomPass(
-        new THREE.Vector2(window.innerWidth, window.innerHeight),
-        0.8,
-        0.5,
-        0.0
-      )
+    bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(window.innerWidth, window.innerHeight),
+      BASE_BLOOM,
+      0.5,
+      0.0
     );
+    composer.addPass(bloomPass);
     composer.addPass(new OutputPass());
   } catch (err) {
     console.warn("Bloom unavailable, falling back to plain rendering:", err);
@@ -139,6 +148,7 @@ async function init() {
   controls.autoRotate = true; // slow cinematic drift
   controls.autoRotateSpeed = 0.12;
 
+  buildNebula();
   buildReticle();
   buildSol();
 
@@ -149,6 +159,11 @@ async function init() {
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && mode === "system") ascend();
   });
+  // track the cursor across the whole window for the parallax sway
+  window.addEventListener("pointermove", (e) => {
+    parTarget.x = (e.clientX / window.innerWidth) * 2 - 1;
+    parTarget.y = -((e.clientY / window.innerHeight) * 2 - 1);
+  });
 
   try {
     await loadStars();
@@ -157,6 +172,8 @@ async function init() {
     console.error(err);
     return;
   }
+
+  startIntro();
 
   animate();
 }
@@ -184,6 +201,74 @@ function buildSol() {
   scene.add(sol);
 }
 
+// --- nebula backdrop ------------------------------------------------------
+// A soft cosmic-cloud sky surrounding the camera: deep indigo/violet voids
+// lit by a warm, divine golden glow — the colour language of "The Creation of
+// Adam" set against the cosmos. It follows the camera so it reads as the
+// infinitely distant heavens.
+function buildNebula() {
+  nebula = new THREE.Mesh(
+    new THREE.SphereGeometry(16000, 48, 32),
+    new THREE.MeshBasicMaterial({
+      map: makeNebulaTexture(),
+      side: THREE.BackSide,
+      fog: false,
+      depthWrite: false,
+      color: 0x666688, // dim so foreground stars dominate
+    })
+  );
+  nebula.renderOrder = -1;
+  scene.add(nebula);
+}
+
+function makeNebulaTexture() {
+  const w = 2048, h = 1024;
+  const c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  const ctx = c.getContext("2d");
+
+  // base deep-space wash
+  const base = ctx.createLinearGradient(0, 0, 0, h);
+  base.addColorStop(0, "#05060f");
+  base.addColorStop(0.5, "#080716");
+  base.addColorStop(1, "#04050c");
+  ctx.fillStyle = base;
+  ctx.fillRect(0, 0, w, h);
+
+  // soft coloured cloud blobs — cosmic cool plus one divine warm region
+  const blobs = [
+    ["rgba(70,60,150,0.55)", 0.18, 0.40, 0.42],
+    ["rgba(40,90,130,0.45)", 0.72, 0.30, 0.38],
+    ["rgba(120,60,150,0.40)", 0.55, 0.70, 0.40],
+    ["rgba(30,70,90,0.40)", 0.88, 0.66, 0.30],
+    ["rgba(20,40,80,0.45)", 0.30, 0.78, 0.36],
+    // the warm, golden "divine light"
+    ["rgba(220,150,70,0.42)", 0.42, 0.48, 0.30],
+    ["rgba(255,200,120,0.30)", 0.45, 0.46, 0.18],
+  ];
+  ctx.globalCompositeOperation = "lighter";
+  for (const [col, fx, fy, fr] of blobs) {
+    const cx = fx * w, cy = fy * h, r = fr * h;
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+    g.addColorStop(0, col);
+    g.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+  }
+
+  // faint dust speckle for texture
+  for (let i = 0; i < 1400; i++) {
+    const x = Math.random() * w, y = Math.random() * h;
+    const a = Math.random() * 0.25;
+    ctx.fillStyle = `rgba(180,190,230,${a})`;
+    ctx.fillRect(x, y, 1, 1);
+  }
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 // --- targeting reticle ----------------------------------------------------
 
 function buildReticle() {
@@ -193,7 +278,7 @@ function buildReticle() {
   const ring = new THREE.Mesh(
     new THREE.RingGeometry(1.0, 1.12, 48),
     new THREE.MeshBasicMaterial({
-      color: 0x9be8ff,
+      color: 0xffd27a,
       transparent: true,
       opacity: 0.9,
       side: THREE.DoubleSide,
@@ -206,7 +291,7 @@ function buildReticle() {
 
   // four tick marks
   const tickMat = new THREE.MeshBasicMaterial({
-    color: 0x9be8ff,
+    color: 0xffd27a,
     transparent: true,
     opacity: 0.8,
     blending: THREE.AdditiveBlending,
@@ -664,6 +749,7 @@ function descend(hit, nm, forcedSys) {
   }
   clearSystem(); // never stack systems
 
+  pulse = 1; // awe flash through the transition
   mode = "system";
   systemInteractive = false;
   leaving = false;
@@ -728,6 +814,7 @@ function descend(hit, nm, forcedSys) {
 function leaveSystem(fly) {
   if (mode !== "system" || leaving) return;
   leaving = true;
+  pulse = 1; // awe flash through the transition
   systemInteractive = false;
   mode = "galaxy";
   ui.backBtn.classList.add("hidden");
@@ -910,10 +997,10 @@ function makeOrbitRing(radius, color, opacity) {
 // --- camera tween ---------------------------------------------------------
 
 let tween = null;
-function flyTo(target, camPos, onDone) {
+function flyTo(target, camPos, onDone, dur = 1700) {
   tween = {
     t0: performance.now(),
-    dur: 1400,
+    dur,
     startTarget: controls.target.clone(),
     startCam: camera.position.clone(),
     endTarget: target.clone(),
@@ -925,7 +1012,8 @@ function flyTo(target, camPos, onDone) {
 function updateTween() {
   if (!tween) return;
   const t = Math.min(1, (performance.now() - tween.t0) / tween.dur);
-  const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; // easeInOutCubic
+  // easeInOutQuint — slow, weighty, cinematic
+  const e = t < 0.5 ? 16 * t * t * t * t * t : 1 - Math.pow(-2 * t + 2, 5) / 2;
   controls.target.lerpVectors(tween.startTarget, tween.endTarget, e);
   camera.position.lerpVectors(tween.startCam, tween.endCam, e);
   if (t >= 1) {
@@ -933,6 +1021,43 @@ function updateTween() {
     tween = null;
     if (done) done();
   }
+}
+
+// The opening reveal: the heavens emerge from darkness as the camera drifts
+// inward — "let there be light".
+function startIntro() {
+  const endTarget = new THREE.Vector3(0, 0, 0);
+  const endCam = camera.position.clone();
+  // begin far away and high, looking into the dark
+  camera.position.set(endCam.x * 4.5, endCam.y * 4.5 + 120, endCam.z * 4.5);
+  controls.target.copy(endTarget);
+  controls.autoRotate = false;
+  intro = true;
+  pulse = 1.2;
+
+  flyTo(endTarget, endCam, () => {
+    intro = false;
+    controls.autoRotate = true;
+  }, 5200);
+
+  const overlay = document.getElementById("reveal");
+  if (overlay) requestAnimationFrame(() => (overlay.style.opacity = "0"));
+  const tagline = document.getElementById("tagline");
+  if (tagline) {
+    tagline.style.opacity = "1";
+    setTimeout(() => (tagline.style.opacity = "0"), 3400);
+  }
+
+  // let any interaction cut the intro short
+  const skip = () => {
+    if (!intro) return;
+    intro = false;
+    controls.autoRotate = true;
+    flyTo(endTarget, endCam, null, 600);
+    if (overlay) overlay.style.opacity = "0";
+    if (tagline) tagline.style.opacity = "0";
+  };
+  renderer.domElement.addEventListener("pointerdown", skip, { once: true });
 }
 
 // --- loop -----------------------------------------------------------------
@@ -984,9 +1109,48 @@ function animate() {
     web.material.opacity = 0.13 + Math.sin(performance.now() * 0.0008) * 0.05;
   }
 
+  // transition flash: a brief swell of bloom + field-of-view, like passing
+  // through light, that eases back to rest
+  if (pulse > 0.001) {
+    pulse *= 0.93;
+    if (bloomPass) bloomPass.strength = BASE_BLOOM + pulse * 0.7;
+    camera.fov = BASE_FOV + pulse * 9;
+    camera.updateProjectionMatrix();
+  } else if (pulse !== 0) {
+    pulse = 0;
+    if (bloomPass) bloomPass.strength = BASE_BLOOM;
+    camera.fov = BASE_FOV;
+    camera.updateProjectionMatrix();
+  }
+
   controls.update();
+
+  // keep the nebula wrapped around us, drifting slowly for a living sky
+  if (nebula) {
+    nebula.position.copy(camera.position);
+    nebula.rotation.y = performance.now() * 0.000004;
+  }
+
+  // mouse parallax: nudge the camera sideways and re-aim at the target, so the
+  // near stars slide against the deep backdrop — depth that follows your gaze
+  parX += (parTarget.x - parX) * 0.04;
+  parY += (parTarget.y - parY) * 0.04;
+  let parOffset = null;
+  if (!intro) {
+    camera.updateMatrixWorld();
+    const amp = camera.position.distanceTo(controls.target) * 0.05;
+    const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
+    const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
+    parOffset = right.multiplyScalar(parX * amp).add(up.multiplyScalar(parY * amp));
+    camera.position.add(parOffset);
+    camera.lookAt(controls.target);
+  }
+
   if (composer) composer.render();
   else renderer.render(scene, camera);
+
+  // restore the true camera position so OrbitControls stays consistent
+  if (parOffset) camera.position.sub(parOffset);
 }
 
 function onResize() {
