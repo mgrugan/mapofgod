@@ -41,18 +41,52 @@ fetches `data/stars.b64` — browsers block `fetch` from `file://`.)
 - **Scroll** — draw near / pull back
 - **Right-drag** — pan
 - **Hover** any star — a targeting reticle locks on and shows its name & distance
-- **Click** any star — *descend* into its system: the camera flies in and a clean
-  orbital solar system of worlds appears, circling the star
-- **Ascend** button (or **Esc**) — return to the full map of the heavens
-- **Search box** — type a name (Sirius, Vega, Rigel…) and click to dive straight in
+- **Click** any star — *dive in*: the camera flies down to the star. If it has
+  **real confirmed planets**, they appear on clean circular orbits; otherwise you
+  just see the star (we don't invent worlds).
+- **Zoom / drag back out** — the system dissolves on its own and you return to the
+  star field, exactly where the star sits in space. The **Ascend** button (or
+  **Esc**) flies you smoothly back to where you started.
+- **Search box** — find real planet systems (TRAPPIST-1, Kepler-90, Sol), bright
+  named stars, or famous giant stars (UY Scuti, Betelgeuse) and click to fly there.
 
-### About the solar systems
+### Real planets only
 
-We don't yet have confirmed planets for most stars, so each system is generated
-*procedurally but deterministically* from the star's own position — the same star
-always yields the same worlds. It's an artistic, futuristic impression of "every
-star a sun with worlds", not a catalog of real exoplanets. Real exoplanet data
-(NASA Exoplanet Archive) is a natural next step — see below.
+Planets shown when you dive in are **real, confirmed exoplanets** from the Open
+Exoplanet Catalogue (plus our own Solar System), placed on their true relative
+orbits and sizes. Stars with no known planets are shown alone — nothing is made up.
+
+### Notable & giant stars
+
+The biggest known stars (Stephenson 2-18, UY Scuti, VY Canis Majoris, …) are too
+distant and faint for the HYG parallax catalog, so they're added as a small
+curated layer (`data/notable.json`). Their **directions are accurate**, but their
+**distances and sizes are genuinely uncertain** in real astronomy — a `*` in the
+readout marks the uncertain ones.
+
+## Is the data real? (validation)
+
+Yes — and you can check it:
+
+```bash
+python3 scripts/validate_stars.py
+```
+
+This compares the catalog's distance and brightness for ~17 well-known stars
+against independent published values (SIMBAD/Hipparcos-Gaia) and confirms the 3D
+placement maths. All pass within tolerance; Deneb deliberately shows a large gap,
+illustrating that some supergiant distances are genuinely uncertain.
+
+**Two different meanings of "size":**
+- **Visible size** in the map = a star's *apparent brightness* (apparent
+  magnitude) — how bright it looks from Earth. This is real catalog data.
+- **Physical size** (a star's radius) is *not* how normal stars are drawn — real
+  stars are point-like at these distances. For the curated giants we list the real
+  radius in the readout and enlarge them only illustratively (clearly not to scale
+  with the distances between stars).
+
+Star distances themselves come from **parallax** (Hipparcos/Gaia) — the gold
+standard for 3D stellar positions.
 
 ## Project layout
 
@@ -62,8 +96,11 @@ js/main.js                   Scene, data loading, shaders, web, dive, systems
 data/stars.b64               Packed star data (float32: x,y,z, r,g,b, size)
 data/stars.json              Metadata + named bright stars (for labels/search)
 data/systems.json            Real exoplanet systems + Sol (host position + planets)
+data/notable.json            Curated notable/giant stars (beyond the HYG catalog)
 scripts/process_stars.py     Rebuilds the star data from the raw HYG catalog
 scripts/process_exoplanets.py  Rebuilds systems.json from the exoplanet catalogue
+scripts/notable_stars.py     Rebuilds notable.json (curated giant stars)
+scripts/validate_stars.py    Checks the data against authoritative references
 .github/workflows/deploy-pages.yml  Auto-publishes the site to GitHub Pages
 ```
 

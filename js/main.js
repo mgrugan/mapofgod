@@ -28,6 +28,13 @@ window.addEventListener("unhandledrejection", (e) =>
 
 const STRIDE = 7; // floats per star: x,y,z, r,g,b, size
 
+// A star system is built in ~80 local units, then scaled down to this many
+// parsecs so it sits at roughly the right size in interstellar space — small
+// enough that zooming out turns it back into a point among the stars.
+const OUTER_LOCAL = 78;
+const SYS_SPAN_PC = 0.22;
+const SCALE = SYS_SPAN_PC / OUTER_LOCAL;
+
 const ui = {
   loading: document.getElementById("loading"),
   tooltip: document.getElementById("tooltip"),
@@ -46,6 +53,14 @@ let namedVec = [];
 let starCount = 0;
 let systems = []; // real exoplanet systems
 let systemVecs = []; // {v, sys} for spatial matching
+let notable = []; // curated notable/giant stars
+let notableVec = []; // {v, star}
+
+// system-view state
+let systemInteractive = false; // true once the fly-in finishes
+let systemCenter = new THREE.Vector3();
+let systemSpanPc = SYS_SPAN_PC;
+let leaving = false;
 
 // in-memory copies of star attributes for picking / system building
 let posArr, colArr, sizeArr;
@@ -212,10 +227,11 @@ function buildReticle() {
 // --- load + build the galaxy ----------------------------------------------
 
 async function loadStars() {
-  const [b64Resp, metaResp, sysResp] = await Promise.all([
+  const [b64Resp, metaResp, sysResp, notResp] = await Promise.all([
     fetch("data/stars.b64"),
     fetch("data/stars.json"),
     fetch("data/systems.json"),
+    fetch("data/notable.json"),
   ]);
   if (!b64Resp.ok) throw new Error("stars.b64 " + b64Resp.status);
   if (!metaResp.ok) throw new Error("stars.json " + metaResp.status);
@@ -230,6 +246,13 @@ async function loadStars() {
     const sjson = await sysResp.json();
     systems = sjson.systems || [];
     systemVecs = systems.map((s) => ({ v: new THREE.Vector3(s.x, s.y, s.z), sys: s }));
+  }
+
+  // curated notable/giant stars (optional)
+  if (notResp.ok) {
+    const njson = await notResp.json();
+    notable = njson.stars || [];
+    notableVec = notable.map((s) => ({ v: new THREE.Vector3(s.x, s.y, s.z), star: s }));
   }
 
   const binary = atob(b64);
@@ -297,6 +320,7 @@ async function loadStars() {
   scene.add(points);
 
   buildWeb();
+  buildNotable();
 
   ui.loading.style.display = "none";
   window.__APP_READY = true;
@@ -350,6 +374,39 @@ function buildWeb() {
   });
   web = new THREE.LineSegments(g, m);
   scene.add(web);
+}
+
+// Render the curated notable/giant stars: a bright fog-immune glow plus an
+// always-readable name label, so famous giants are visible and findable even
+// though they sit far beyond the local star cloud.
+function buildNotable() {
+  for (const s of notable) {
+    const pos = new THREE.Vector3(s.x, s.y, s.z);
+    const col = s.type && s.type.toLowerCase().includes("blue") ? 0x9fc6ff : 0xff8a5a;
+
+    const glow = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: makeGlowTexture(),
+        color: col,
+        blending: THREE.AdditiveBlending,
+        transparent: true,
+        depthWrite: false,
+        fog: false,
+      })
+    );
+    // size grows (mildly) with the star's physical radius — illustrative only
+    const r = s.radiusRsun || 100;
+    const gs = THREE.MathUtils.clamp(6 + Math.log10(r) * 6, 6, 26);
+    glow.scale.set(gs, gs, 1);
+    glow.position.copy(pos);
+    scene.add(glow);
+    s._glow = glow;
+
+    const label = makeLabelSprite(s.name);
+    label.position.copy(pos);
+    scene.add(label);
+    s._label = label;
+  }
 }
 
 // --- picking: hover + click ----------------------------------------------
@@ -408,7 +465,23 @@ function pickNearest(e) {
     const ang = perp / t; // angular miss — favours stars near the cursor
     if (ang < bestAng) { bestAng = ang; best = i; bestT = t; }
   }
-  if (best < 0 || bestAng > 0.06) return null; // require a reasonably close aim
+  // also consider the curated notable/giant stars
+  let bestNotable = null;
+  for (const nv of notableVec) {
+    v.set(nv.v.x - o.x, nv.v.y - o.y, nv.v.z - o.z);
+    const t = v.dot(d);
+    if (t <= 0) continue;
+    closest.copy(d).multiplyScalar(t).add(o);
+    const perp = nv.v.distanceTo(closest);
+    const ang = perp / t;
+    if (ang < bestAng) { bestAng = ang; best = -2; bestNotable = nv.star; }
+  }
+
+  if (bestAng > 0.06) return null; // require a reasonably close aim
+  if (best === -2) {
+    return { index: -1, pos: new THREE.Vector3(bestNotable.x, bestNotable.y, bestNotable.z), notable: bestNotable };
+  }
+  if (best < 0) return null;
   return {
     index: best,
     pos: new THREE.Vector3(posArr[best * 3], posArr[best * 3 + 1], posArr[best * 3 + 2]),
@@ -424,12 +497,46 @@ function nameFor(pos) {
   return best;
 }
 
+// cheap notable-star hover test (only ~13 entries)
+function pickNotableRay() {
+  const o = raycaster.ray.origin, d = raycaster.ray.direction;
+  const closest = new THREE.Vector3();
+  let best = null, bestAng = 0.05;
+  for (const nv of notableVec) {
+    const v = new THREE.Vector3().subVectors(nv.v, o);
+    const t = v.dot(d);
+    if (t <= 0) continue;
+    closest.copy(d).multiplyScalar(t).add(o);
+    const ang = nv.v.distanceTo(closest) / t;
+    if (ang < bestAng) { bestAng = ang; best = nv.star; }
+  }
+  return best;
+}
+
 function onHover(e) {
   if (mode === "system") {
     reticle.visible = false;
     hoverPlanet(e);
     return;
   }
+  pointer.x = (e.clientX / window.innerWidth) * 2 - 1;
+  pointer.y = -(e.clientY / window.innerHeight) * 2 + 1;
+  raycaster.setFromCamera(pointer, camera);
+
+  const giant = pickNotableRay();
+  if (giant) {
+    reticle.visible = true;
+    reticle.position.set(giant.x, giant.y, giant.z);
+    ui.tooltip.style.display = "block";
+    ui.tooltip.style.left = e.clientX + 16 + "px";
+    ui.tooltip.style.top = e.clientY + 16 + "px";
+    const rr = giant.radiusRsun ? `${giant.radiusRsun.toLocaleString()} R☉` : "—";
+    ui.tooltip.innerHTML =
+      `<div class="name">${giant.name}</div>` +
+      `<div class="sub">${giant.type} · ${rr}${giant.uncertain ? " (uncertain)" : ""} · click to visit</div>`;
+    return;
+  }
+
   const hit = pickStar(e);
   if (!hit) { ui.tooltip.style.display = "none"; reticle.visible = false; return; }
 
@@ -466,10 +573,10 @@ function hoverPlanet(e) {
 }
 
 function onClick(e) {
-  if (mode === "system") return;
+  if (mode === "system") return; // use search or zoom out to leave first
   const hit = pickNearest(e);
   if (!hit) return;
-  const nm = nameFor(hit.pos);
+  const nm = hit.notable ? null : nameFor(hit.pos);
   descend(hit, nm);
 }
 
@@ -492,6 +599,23 @@ function onSearch() {
       li.addEventListener("click", () => {
         const pos = new THREE.Vector3(s.x, s.y, s.z);
         descend({ index: -1, pos }, null, s);
+        ui.search.value = "";
+        ui.results.innerHTML = "";
+      });
+      ui.results.appendChild(li);
+    });
+
+  // Notable / giant stars.
+  notable
+    .filter((s) => s.name.toLowerCase().includes(q))
+    .slice(0, 6)
+    .forEach((s) => {
+      const li = document.createElement("div");
+      li.className = "result";
+      li.innerHTML = `<span>✦ ${s.name}</span><span class="con">giant</span>`;
+      li.addEventListener("click", () => {
+        const pos = new THREE.Vector3(s.x, s.y, s.z);
+        descend({ index: -1, pos, notable: s }, null);
         ui.search.value = "";
         ui.results.innerHTML = "";
       });
@@ -528,73 +652,104 @@ function realSystemFor(pos) {
   return best;
 }
 
+function clearSystem() {
+  if (systemGroup) {
+    scene.remove(systemGroup);
+    disposeGroup(systemGroup);
+    systemGroup = null;
+  }
+}
+
 function descend(hit, nm, forcedSys) {
+  // Only remember where to fly back to if we're coming from the galaxy view;
+  // when jumping system→system (e.g. a second search) keep the original view.
+  if (mode !== "system") {
+    savedView = { pos: camera.position.clone(), target: controls.target.clone() };
+  }
+  clearSystem(); // never stack systems
+
   mode = "system";
+  systemInteractive = false;
+  leaving = false;
   reticle.visible = false;
   ui.tooltip.style.display = "none";
   controls.autoRotate = false;
 
-  savedView = {
-    pos: camera.position.clone(),
-    target: controls.target.clone(),
-  };
-
-  const realSys = forcedSys || realSystemFor(hit.pos);
+  const realSys = forcedSys || (hit.notable ? null : realSystemFor(hit.pos));
+  const notableStar = hit.notable || null;
 
   let color;
-  if (realSys && realSys.teff) color = kelvinToColor(realSys.teff);
+  if (notableStar)
+    color = notableStar.type && notableStar.type.toLowerCase().includes("blue")
+      ? new THREE.Color(0x9fc6ff) : new THREE.Color(0xff8a5a);
+  else if (realSys && realSys.teff) color = kelvinToColor(realSys.teff);
   else if (hit.index >= 0)
     color = new THREE.Color(colArr[hit.index * 3], colArr[hit.index * 3 + 1], colArr[hit.index * 3 + 2]);
   else color = new THREE.Color(0xfff1c0);
 
-  systemGroup = buildSystem(hit.pos, color, realSys);
+  systemGroup = buildSystem(hit.pos, color, realSys, notableStar);
   scene.add(systemGroup);
+  systemCenter.copy(hit.pos);
+  systemSpanPc = systemGroup.userData.spanPc;
 
-  // dim the rest of the heavens so the system reads clearly
-  if (points) points.material.uniforms.uDim.value = 0.22;
-  if (web) web.material.opacity = 0.04;
+  if (points) points.material.uniforms.uDim.value = 0.18;
+  if (web) web.material.opacity = 0.03;
 
-  // frame the whole system: fly to a distance that fits its outer orbit
-  const span = systemGroup.userData.span || 70;
-  const offset = new THREE.Vector3(0, span * 0.5, span * 1.15);
-  flyTo(hit.pos, hit.pos.clone().add(offset), () => {
-    controls.minDistance = 4;
-    controls.maxDistance = span * 6;
+  // fly in to frame the system (everything here is in parsecs now)
+  const off = new THREE.Vector3(0, systemSpanPc * 0.6, systemSpanPc * 1.4);
+  flyTo(hit.pos, hit.pos.clone().add(off), () => {
+    controls.minDistance = systemSpanPc * 0.05;
+    controls.maxDistance = 9000;
+    systemInteractive = true; // now zooming out will dissolve the system
   });
 
   // readout
-  const name = realSys ? realSys.host : nm ? nm.name : "Uncharted Star";
-  const real = !!realSys;
-  ui.roTitle.textContent = name + (name === "Sol" ? " — Our System" : " System");
   const planets = systemGroup.userData.planets.length;
-  ui.roRows.innerHTML =
-    `<div><span>Worlds</span><b>${planets}</b></div>` +
-    `<div><span>Distance</span><b>${hit.pos.length().toFixed(1)} pc</b></div>` +
-    `<div><span>Planets</span><b>${real ? "Real (confirmed)" : "Imagined"}</b></div>`;
-  document.querySelector("#readout .label").textContent = real
-    ? "Confirmed System"
-    : "Stellar System";
+  if (notableStar) {
+    ui.roTitle.textContent = notableStar.name;
+    document.querySelector("#readout .label").textContent = "Notable Star";
+    const rr = notableStar.radiusRsun ? notableStar.radiusRsun.toLocaleString() + " R☉" : "—";
+    ui.roRows.innerHTML =
+      `<div><span>Type</span><b>${notableStar.type}</b></div>` +
+      `<div><span>Radius</span><b>${rr}</b></div>` +
+      `<div><span>Distance</span><b>~${Math.round(notableStar.dist).toLocaleString()} pc${notableStar.uncertain ? "*" : ""}</b></div>`;
+  } else {
+    const name = realSys ? realSys.host : nm ? nm.name : "Uncharted Star";
+    ui.roTitle.textContent = name + (name === "Sol" ? " — Our System" : " System");
+    document.querySelector("#readout .label").textContent = realSys ? "Confirmed System" : "Star";
+    ui.roRows.innerHTML =
+      `<div><span>Distance</span><b>${hit.pos.length().toFixed(1)} pc</b></div>` +
+      (realSys
+        ? `<div><span>Confirmed worlds</span><b>${planets}</b></div>`
+        : `<div><span>Planets</span><b>None confirmed</b></div>`);
+  }
   ui.backBtn.classList.remove("hidden");
 }
 
-function ascend() {
-  if (mode !== "system") return;
+// Leave the system. fly=true smoothly returns to the saved galaxy view (the
+// Ascend button / Esc); fly=false just dissolves in place (when the user has
+// manually zoomed/dragged back out, so the system melts into the star field).
+function leaveSystem(fly) {
+  if (mode !== "system" || leaving) return;
+  leaving = true;
+  systemInteractive = false;
   mode = "galaxy";
   ui.backBtn.classList.add("hidden");
-
-  if (systemGroup) {
-    flyTo(savedView.target, savedView.pos, () => {
-      scene.remove(systemGroup);
-      disposeGroup(systemGroup);
-      systemGroup = null;
-      controls.minDistance = 2;
-      controls.maxDistance = 9000;
-      controls.autoRotate = true;
-    });
-  }
+  ui.tooltip.style.display = "none";
 
   if (points) points.material.uniforms.uDim.value = 1.0;
   if (web) web.material.opacity = 0.16;
+
+  const finish = () => {
+    clearSystem();
+    controls.minDistance = 2;
+    controls.maxDistance = 9000;
+    controls.autoRotate = true;
+    leaving = false;
+  };
+
+  if (fly && savedView) flyTo(savedView.target, savedView.pos, finish);
+  else finish();
 
   ui.roTitle.textContent = "The Local Heavens";
   document.querySelector("#readout .label").textContent = "Domain";
@@ -603,14 +758,19 @@ function ascend() {
     `<div><span>Span</span><b>~2,000 parsecs</b></div>`;
 }
 
-// Build a star system. If `realSys` is given, render its real (confirmed)
-// planets with their true relative ordering and sizes; otherwise generate a
-// clean procedural system, deterministic per star location.
-function buildSystem(pos, starColor, realSys) {
+function ascend() {
+  leaveSystem(true);
+}
+
+// Build a star system in ~80 local units, then scale it down to ~0.2 pc so it
+// sits at roughly the right size in space. Planets are shown ONLY for stars
+// with real confirmed planets; otherwise we show the star alone (no invented
+// worlds). `notableStar` enlarges the central star to convey its real size.
+function buildSystem(pos, starColor, realSys, notableStar) {
   const group = new THREE.Group();
   group.position.copy(pos);
-  // gentle tilt so orbits read as 3D but stay clean circles
-  group.rotation.x = -0.42;
+  group.scale.setScalar(SCALE); // local units -> parsecs
+  group.rotation.x = -0.42; // gentle tilt so orbits read as 3D, stay circular
   group.rotation.z = 0.12;
 
   const seed = Math.abs(
@@ -620,8 +780,13 @@ function buildSystem(pos, starColor, realSys) {
   );
   const rng = mulberry32(seed || 1);
 
-  // central star
-  const starR = 2.6;
+  // central star — bigger (log-scaled) for notable giants, illustrative only
+  let starR = 2.6;
+  if (notableStar && notableStar.radiusRsun) {
+    starR = THREE.MathUtils.clamp(
+      2.6 * (1 + Math.log10(Math.max(notableStar.radiusRsun, 1)) * 0.9), 2.6, 26
+    );
+  }
   const star = new THREE.Mesh(
     new THREE.SphereGeometry(starR, 32, 32),
     new THREE.MeshBasicMaterial({ color: starColor })
@@ -629,114 +794,78 @@ function buildSystem(pos, starColor, realSys) {
   group.add(star);
   const starGlow = new THREE.Sprite(
     new THREE.SpriteMaterial({
-      map: makeGlowTexture(),
-      color: starColor,
-      blending: THREE.AdditiveBlending,
-      transparent: true,
-      depthWrite: false,
+      map: makeGlowTexture(), color: starColor,
+      blending: THREE.AdditiveBlending, transparent: true, depthWrite: false,
     })
   );
-  starGlow.scale.set(starR * 10, starR * 10, 1);
+  starGlow.scale.set(starR * 6, starR * 6, 1);
   group.add(starGlow);
 
-  // Decide orbit radii (scene units). Real systems are rescaled per-system on a
-  // log scale so wildly different real distances all read clearly.
-  const innerR = starR + 9;
-  const outerR = 78;
-  let specs; // {dispR, dispSize, color, name, speedR}
+  const planets = [];
+  let localSpan = Math.max(starR * 4.5, 24);
 
   if (realSys && realSys.planets.length) {
+    const innerR = starR + 9;
+    const outerR = OUTER_LOCAL;
+    localSpan = outerR;
     const ps = realSys.planets;
     const aMin = Math.log(ps[0].a);
     const aMax = Math.log(ps[ps.length - 1].a);
     const range = Math.max(1e-3, aMax - aMin);
-    specs = ps.map((p, i) => {
+
+    // faint orbital-plane disc
+    const grid = new THREE.Mesh(
+      new THREE.RingGeometry(starR + 2, outerR + 6, 96, 1),
+      new THREE.MeshBasicMaterial({
+        color: 0x24407a, transparent: true, opacity: 0.05,
+        side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false,
+      })
+    );
+    grid.rotation.x = Math.PI / 2;
+    group.add(grid);
+
+    ps.forEach((p, i) => {
       const f = ps.length === 1 ? 0.5 : (Math.log(p.a) - aMin) / range;
       const dispR = innerR + f * (outerR - innerR);
       const rjup = p.r || 0.18;
       const dispSize = THREE.MathUtils.clamp(0.7 + 2.0 * Math.sqrt(rjup), 0.7, 4.2);
-      return {
-        dispR,
-        dispSize,
-        color: planetColor(rjup, i),
-        name: p.name,
-        a: p.a,
-        speedR: p.a, // real spacing drives relative speed (Kepler-ish)
-        ringed: rjup > 0.6 && rng() > 0.5,
-      };
-    });
-  } else {
-    const n = 3 + Math.floor(rng() * 5); // 3..7
-    specs = [];
-    let r = innerR;
-    for (let i = 0; i < n; i++) {
-      r += (outerR - innerR) / (n + 1) * (0.6 + rng() * 0.9);
-      const rjup = 0.1 + rng() * 1.4;
-      specs.push({
-        dispR: r,
-        dispSize: THREE.MathUtils.clamp(0.7 + 2.0 * Math.sqrt(rjup), 0.7, 4.2),
-        color: planetColor(rjup, i),
-        name: "Unnamed world",
-        a: r / 14,
-        speedR: r / 14,
-        ringed: rjup > 0.7 && rng() > 0.6,
-      });
-    }
-  }
+      const col = planetColor(rjup, i);
 
-  // faint orbital-plane disc for orientation
-  const grid = new THREE.Mesh(
-    new THREE.RingGeometry(starR + 2, outerR + 6, 96, 1),
-    new THREE.MeshBasicMaterial({
-      color: 0x24407a, transparent: true, opacity: 0.05,
-      side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false,
-    })
-  );
-  grid.rotation.x = Math.PI / 2;
-  group.add(grid);
-
-  const planets = [];
-  for (let i = 0; i < specs.length; i++) {
-    const sp = specs[i];
-    group.add(makeOrbitRing(sp.dispR, 0x5e7bdc, 0.34));
-
-    const planet = new THREE.Mesh(
-      new THREE.SphereGeometry(sp.dispSize, 22, 22),
-      new THREE.MeshStandardMaterial({
-        color: sp.color, emissive: sp.color, emissiveIntensity: 0.4,
-        roughness: 0.7, metalness: 0.1,
-      })
-    );
-    planet.userData.name = sp.name;
-    planet.userData.a = sp.a;
-    if (sp.ringed) {
-      const pr = new THREE.Mesh(
-        new THREE.RingGeometry(sp.dispSize * 1.5, sp.dispSize * 2.4, 32),
-        new THREE.MeshBasicMaterial({
-          color: sp.color, transparent: true, opacity: 0.5,
-          side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false,
+      group.add(makeOrbitRing(dispR, 0x5e7bdc, 0.34));
+      const planet = new THREE.Mesh(
+        new THREE.SphereGeometry(dispSize, 22, 22),
+        new THREE.MeshStandardMaterial({
+          color: col, emissive: col, emissiveIntensity: 0.4, roughness: 0.7, metalness: 0.1,
         })
       );
-      pr.rotation.x = Math.PI / 2.3;
-      planet.add(pr);
-    }
-    group.add(planet);
-
-    planets.push({
-      mesh: planet,
-      radius: sp.dispR,
-      angle: rng() * Math.PI * 2,
-      speed: (0.9 / Math.pow(Math.max(sp.speedR, 0.02), 0.66)) * 0.18,
+      planet.userData.name = p.name;
+      planet.userData.a = p.a;
+      if (rjup > 0.6 && rng() > 0.5) {
+        const pr = new THREE.Mesh(
+          new THREE.RingGeometry(dispSize * 1.5, dispSize * 2.4, 32),
+          new THREE.MeshBasicMaterial({
+            color: col, transparent: true, opacity: 0.5,
+            side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false,
+          })
+        );
+        pr.rotation.x = Math.PI / 2.3;
+        planet.add(pr);
+      }
+      group.add(planet);
+      planets.push({
+        mesh: planet, radius: dispR, angle: rng() * Math.PI * 2,
+        speed: (0.9 / Math.pow(Math.max(p.a, 0.02), 0.66)) * 0.18,
+      });
     });
-  }
 
-  const light = new THREE.PointLight(0xffffff, 2.4, 600, 1.1);
-  group.add(light);
-  group.add(new THREE.AmbientLight(0x2a3a60, 1.6));
+    const light = new THREE.PointLight(0xffffff, 2.4, 600, 1.1);
+    group.add(light);
+    group.add(new THREE.AmbientLight(0x2a3a60, 1.6));
+  }
 
   group.userData.planets = planets;
   group.userData.star = star;
-  group.userData.span = outerR;
+  group.userData.spanPc = localSpan * SCALE;
   return group;
 }
 
@@ -830,6 +959,26 @@ function animate() {
     }
   }
 
+  // dissolve the system once the user zooms/drags far enough back out, so it
+  // melts naturally into the surrounding star field
+  if (mode === "system" && systemInteractive && !tween) {
+    if (camera.position.distanceTo(systemCenter) > systemSpanPc * 5) {
+      leaveSystem(false);
+    }
+  }
+
+  // keep notable-star name labels readable at any distance (hidden while diving)
+  const showLabels = mode === "galaxy";
+  for (const s of notable) {
+    if (s._glow) s._glow.visible = showLabels;
+    if (!s._label) continue;
+    s._label.visible = showLabels;
+    if (!showLabels) continue;
+    const d = camera.position.distanceTo(s._label.position);
+    const k = THREE.MathUtils.clamp(d * 0.04, 6, 5000);
+    s._label.scale.set(k * s._label.userData.aspect, k, 1);
+  }
+
   // keep reticle a constant screen size + give it a slow spin
   if (reticle.visible) {
     const s = camera.position.distanceTo(reticle.position) * 0.03;
@@ -876,6 +1025,33 @@ function disposeGroup(group) {
       else o.material.dispose();
     }
   });
+}
+
+// A text label sprite (used for notable star names). Its world scale is set
+// each frame to keep a roughly constant on-screen size.
+function makeLabelSprite(text) {
+  const pad = 16, fs = 44;
+  const c = document.createElement("canvas");
+  const ctx = c.getContext("2d");
+  ctx.font = `${fs}px Orbitron, Arial, sans-serif`;
+  const w = Math.ceil(ctx.measureText(text).width) + pad * 2;
+  const h = fs + pad * 2;
+  c.width = w; c.height = h;
+  // canvas resize resets context state, so re-set the font before drawing
+  ctx.font = `${fs}px Orbitron, Arial, sans-serif`;
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = "rgba(255,220,150,0.95)";
+  ctx.shadowColor = "rgba(255,160,80,0.9)";
+  ctx.shadowBlur = 12;
+  ctx.fillText(text, pad, h / 2);
+  const tex = new THREE.CanvasTexture(c);
+  tex.minFilter = THREE.LinearFilter;
+  const spr = new THREE.Sprite(
+    new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, depthTest: false, fog: false })
+  );
+  spr.userData.aspect = w / h;
+  spr.renderOrder = 998;
+  return spr;
 }
 
 function makeStarTexture() {
