@@ -166,20 +166,20 @@ async function init() {
 function buildSol() {
   sol = new THREE.Group();
   const core = new THREE.Mesh(
-    new THREE.SphereGeometry(0.9, 24, 24),
+    new THREE.SphereGeometry(0.32, 20, 20),
     new THREE.MeshBasicMaterial({ color: 0xfff1c0 })
   );
   sol.add(core);
   const glow = new THREE.Sprite(
     new THREE.SpriteMaterial({
       map: makeGlowTexture(),
-      color: 0xfff0c0,
+      color: 0xffe9b0,
       blending: THREE.AdditiveBlending,
       transparent: true,
       depthWrite: false,
     })
   );
-  glow.scale.set(10, 10, 1);
+  glow.scale.set(2.2, 2.2, 1);
   sol.add(glow);
   scene.add(sol);
 }
@@ -396,16 +396,12 @@ function buildNotable() {
     );
     // size grows (mildly) with the star's physical radius — illustrative only
     const r = s.radiusRsun || 100;
-    const gs = THREE.MathUtils.clamp(6 + Math.log10(r) * 6, 6, 26);
+    const gs = THREE.MathUtils.clamp(5 + Math.log10(r) * 4, 5, 16);
     glow.scale.set(gs, gs, 1);
     glow.position.copy(pos);
     scene.add(glow);
     s._glow = glow;
-
-    const label = makeLabelSprite(s.name);
-    label.position.copy(pos);
-    scene.add(label);
-    s._label = label;
+    // (no floating name label — names appear on hover and in search)
   }
 }
 
@@ -840,7 +836,7 @@ function buildSystem(pos, starColor, realSys, notableStar) {
       );
       planet.userData.name = p.name;
       planet.userData.a = p.a;
-      if (rjup > 0.6 && rng() > 0.5) {
+      if (p.ring) {
         const pr = new THREE.Mesh(
           new THREE.RingGeometry(dispSize * 1.5, dispSize * 2.4, 32),
           new THREE.MeshBasicMaterial({
@@ -967,16 +963,12 @@ function animate() {
     }
   }
 
-  // keep notable-star name labels readable at any distance (hidden while diving)
-  const showLabels = mode === "galaxy";
+  // hide map markers (Sun + giant glows) while diving so they don't obscure
+  // the system being viewed
+  const inGalaxy = mode === "galaxy";
+  if (sol) sol.visible = inGalaxy;
   for (const s of notable) {
-    if (s._glow) s._glow.visible = showLabels;
-    if (!s._label) continue;
-    s._label.visible = showLabels;
-    if (!showLabels) continue;
-    const d = camera.position.distanceTo(s._label.position);
-    const k = THREE.MathUtils.clamp(d * 0.04, 6, 5000);
-    s._label.scale.set(k * s._label.userData.aspect, k, 1);
+    if (s._glow) s._glow.visible = inGalaxy;
   }
 
   // keep reticle a constant screen size + give it a slow spin
@@ -1025,33 +1017,6 @@ function disposeGroup(group) {
       else o.material.dispose();
     }
   });
-}
-
-// A text label sprite (used for notable star names). Its world scale is set
-// each frame to keep a roughly constant on-screen size.
-function makeLabelSprite(text) {
-  const pad = 16, fs = 44;
-  const c = document.createElement("canvas");
-  const ctx = c.getContext("2d");
-  ctx.font = `${fs}px Orbitron, Arial, sans-serif`;
-  const w = Math.ceil(ctx.measureText(text).width) + pad * 2;
-  const h = fs + pad * 2;
-  c.width = w; c.height = h;
-  // canvas resize resets context state, so re-set the font before drawing
-  ctx.font = `${fs}px Orbitron, Arial, sans-serif`;
-  ctx.textBaseline = "middle";
-  ctx.fillStyle = "rgba(255,220,150,0.95)";
-  ctx.shadowColor = "rgba(255,160,80,0.9)";
-  ctx.shadowBlur = 12;
-  ctx.fillText(text, pad, h / 2);
-  const tex = new THREE.CanvasTexture(c);
-  tex.minFilter = THREE.LinearFilter;
-  const spr = new THREE.Sprite(
-    new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, depthTest: false, fog: false })
-  );
-  spr.userData.aspect = w / h;
-  spr.renderOrder = 998;
-  return spr;
 }
 
 function makeStarTexture() {

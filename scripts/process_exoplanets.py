@@ -115,7 +115,7 @@ def main():
             {"name": "Earth", "a": 1.000, "r": 0.0892},
             {"name": "Mars", "a": 1.524, "r": 0.0475},
             {"name": "Jupiter", "a": 5.203, "r": 1.000},
-            {"name": "Saturn", "a": 9.537, "r": 0.843},
+            {"name": "Saturn", "a": 9.537, "r": 0.843, "ring": True},
             {"name": "Uranus", "a": 19.19, "r": 0.358},
             {"name": "Neptune", "a": 30.07, "r": 0.346},
         ],
