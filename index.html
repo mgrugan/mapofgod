@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Map of the Universe — 3D Star Map</title>
+    <meta
+      name="description"
+      content="An interactive 3D map of nearby stars built from the real HYG astronomical catalog."
+    />
+    <style>
+      :root {
+        --fg: #e8ecff;
+        --muted: #8893b8;
+        --panel: rgba(10, 14, 32, 0.78);
+        --border: rgba(120, 150, 255, 0.18);
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: #000005;
+        color: var(--fg);
+        font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+        overflow: hidden;
+      }
+      canvas { display: block; }
+
+      #title {
+        position: fixed;
+        top: 18px;
+        left: 20px;
+        z-index: 10;
+        pointer-events: none;
+      }
+      #title h1 {
+        margin: 0;
+        font-size: 20px;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+      }
+      #title p {
+        margin: 4px 0 0;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      #panel {
+        position: fixed;
+        top: 18px;
+        right: 20px;
+        z-index: 10;
+        width: 260px;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 14px;
+        backdrop-filter: blur(8px);
+      }
+      #search {
+        width: 100%;
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: rgba(0, 0, 0, 0.4);
+        color: var(--fg);
+        font-size: 13px;
+        outline: none;
+      }
+      #search::placeholder { color: var(--muted); }
+      #results { margin-top: 8px; max-height: 280px; overflow-y: auto; }
+      .result {
+        padding: 7px 9px;
+        font-size: 12px;
+        border-radius: 7px;
+        cursor: pointer;
+        color: var(--muted);
+      }
+      .result:hover {
+        background: rgba(120, 150, 255, 0.14);
+        color: var(--fg);
+      }
+
+      #hud {
+        display: none;
+        position: fixed;
+        bottom: 16px;
+        left: 20px;
+        z-index: 10;
+        font-size: 12px;
+        color: var(--muted);
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 10px 14px;
+        max-width: 360px;
+      }
+      #hud b { color: var(--fg); }
+
+      #tooltip {
+        display: none;
+        position: fixed;
+        z-index: 20;
+        pointer-events: none;
+        background: rgba(8, 10, 26, 0.92);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 8px 10px;
+        font-size: 12px;
+        line-height: 1.4;
+        white-space: nowrap;
+      }
+
+      #loading {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 30;
+        font-size: 14px;
+        color: var(--muted);
+        letter-spacing: 1px;
+      }
+    </style>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div id="title">
+      <h1>🌌 Map of the Universe</h1>
+      <p>Real stars from the HYG catalog · positions in parsecs</p>
+    </div>
+
+    <div id="panel">
+      <input id="search" type="text" placeholder="Search a star (e.g. Sirius, Vega)…" autocomplete="off" />
+      <div id="results"></div>
+    </div>
+
+    <div id="hud">
+      Showing <b id="count">0</b> stars within ~2,000 parsecs of the Sun.
+      <b>Drag</b> to orbit · <b>Scroll</b> to zoom · <b>Right-drag</b> to pan ·
+      hover a bright star for its name.
+    </div>
+
+    <div id="tooltip"></div>
+    <div id="loading">Loading the stars…</div>
+
+    <script type="module" src="js/main.js"></script>
+  </body>
+</html>

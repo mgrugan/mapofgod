@@ -1,0 +1,7 @@
+# Raw source catalog (34 MB) — regenerate with scripts/process_stars.py
+scripts/hygdata_v41.csv
+*.csv
+
+# OS / editor cruft
+.DS_Store
+*.swp
