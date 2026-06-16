@@ -8,10 +8,23 @@
 
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
-import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
-import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
-import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+
+// Surface any error on screen instead of failing to a silent black void.
+function showFatal(msg) {
+  const el = document.getElementById("loading");
+  if (!el) return;
+  el.style.display = "flex";
+  el.innerHTML =
+    '<div style="max-width:520px;text-align:center;padding:24px;font-family:Rajdhani,sans-serif">' +
+    '<div style="font-family:Orbitron,sans-serif;letter-spacing:3px;color:#ff8a8a;margin-bottom:12px">UNABLE TO CHART THE HEAVENS</div>' +
+    '<div style="color:#9fb0d8;font-size:15px;line-height:1.6">' + msg + "</div></div>";
+}
+window.addEventListener("error", (e) =>
+  showFatal((e.message || "Script error") + "<br><br>If you opened the file directly, run a local server instead — see the README.")
+);
+window.addEventListener("unhandledrejection", (e) =>
+  showFatal("" + (e.reason && e.reason.message ? e.reason.message : e.reason))
+);
 
 const STRIDE = 7; // floats per star: x,y,z, r,g,b, size
 
@@ -31,6 +44,8 @@ let points, web, sol;
 let named = [];
 let namedVec = [];
 let starCount = 0;
+let systems = []; // real exoplanet systems
+let systemVecs = []; // {v, sys} for spatial matching
 
 // in-memory copies of star attributes for picking / system building
 let posArr, colArr, sizeArr;
@@ -47,6 +62,32 @@ const pointer = new THREE.Vector2();
 let reticle;
 
 init();
+
+async function setupBloom() {
+  try {
+    const [{ EffectComposer }, { RenderPass }, { UnrealBloomPass }, { OutputPass }] =
+      await Promise.all([
+        import("three/addons/postprocessing/EffectComposer.js"),
+        import("three/addons/postprocessing/RenderPass.js"),
+        import("three/addons/postprocessing/UnrealBloomPass.js"),
+        import("three/addons/postprocessing/OutputPass.js"),
+      ]);
+    composer = new EffectComposer(renderer);
+    composer.addPass(new RenderPass(scene, camera));
+    composer.addPass(
+      new UnrealBloomPass(
+        new THREE.Vector2(window.innerWidth, window.innerHeight),
+        0.8,
+        0.5,
+        0.0
+      )
+    );
+    composer.addPass(new OutputPass());
+  } catch (err) {
+    console.warn("Bloom unavailable, falling back to plain rendering:", err);
+    composer = null;
+  }
+}
 
 async function init() {
   scene = new THREE.Scene();
@@ -68,18 +109,10 @@ async function init() {
   renderer.toneMappingExposure = 1.1;
   document.body.appendChild(renderer.domElement);
 
-  // post-processing: bloom gives stars and orbits their luminous glow
-  composer = new EffectComposer(renderer);
-  composer.addPass(new RenderPass(scene, camera));
-  const bloom = new UnrealBloomPass(
-    new THREE.Vector2(window.innerWidth, window.innerHeight),
-    0.85, // strength
-    0.5, // radius
-    0.0 // threshold
-  );
-  composer.addPass(bloom);
-  // applies tone mapping + sRGB so colours look right through the composer
-  composer.addPass(new OutputPass());
+  // Post-processing (bloom) is a nice-to-have. Load it dynamically so that if
+  // the add-on modules fail to load, the map still renders normally instead of
+  // going black.
+  await setupBloom();
 
   controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
@@ -179,9 +212,10 @@ function buildReticle() {
 // --- load + build the galaxy ----------------------------------------------
 
 async function loadStars() {
-  const [b64Resp, metaResp] = await Promise.all([
+  const [b64Resp, metaResp, sysResp] = await Promise.all([
     fetch("data/stars.b64"),
     fetch("data/stars.json"),
+    fetch("data/systems.json"),
   ]);
   if (!b64Resp.ok) throw new Error("stars.b64 " + b64Resp.status);
   if (!metaResp.ok) throw new Error("stars.json " + metaResp.status);
@@ -190,6 +224,13 @@ async function loadStars() {
   const meta = await metaResp.json();
   named = meta.named || [];
   namedVec = named.map((s) => ({ v: new THREE.Vector3(s.x, s.y, s.z), s }));
+
+  // real exoplanet systems (optional — don't fail the map if missing)
+  if (sysResp.ok) {
+    const sjson = await sysResp.json();
+    systems = sjson.systems || [];
+    systemVecs = systems.map((s) => ({ v: new THREE.Vector3(s.x, s.y, s.z), sys: s }));
+  }
 
   const binary = atob(b64);
   const bytes = new Uint8Array(binary.length);
@@ -258,6 +299,7 @@ async function loadStars() {
   buildWeb();
 
   ui.loading.style.display = "none";
+  window.__APP_READY = true;
   ui.roCount.textContent = n.toLocaleString();
 }
 
@@ -341,6 +383,38 @@ function pickStar(e) {
   return { index: i, pos: v };
 }
 
+// For clicks: find the star whose line-of-sight is closest to the cursor, so a
+// click always descends into *some* star (never a dead click on empty space).
+function pickNearest(e) {
+  if (!points) return null;
+  pointer.x = (e.clientX / window.innerWidth) * 2 - 1;
+  pointer.y = -(e.clientY / window.innerHeight) * 2 + 1;
+  raycaster.setFromCamera(pointer, camera);
+  const o = raycaster.ray.origin;
+  const d = raycaster.ray.direction;
+  let best = -1, bestAng = Infinity, bestT = 0;
+  const v = new THREE.Vector3();
+  const closest = new THREE.Vector3();
+  for (let i = 0; i < starCount; i++) {
+    v.set(posArr[i * 3] - o.x, posArr[i * 3 + 1] - o.y, posArr[i * 3 + 2] - o.z);
+    const t = v.dot(d);
+    if (t <= 0) continue;
+    closest.copy(d).multiplyScalar(t).add(o);
+    const perp = Math.hypot(
+      posArr[i * 3] - closest.x,
+      posArr[i * 3 + 1] - closest.y,
+      posArr[i * 3 + 2] - closest.z
+    );
+    const ang = perp / t; // angular miss — favours stars near the cursor
+    if (ang < bestAng) { bestAng = ang; best = i; bestT = t; }
+  }
+  if (best < 0 || bestAng > 0.06) return null; // require a reasonably close aim
+  return {
+    index: best,
+    pos: new THREE.Vector3(posArr[best * 3], posArr[best * 3 + 1], posArr[best * 3 + 2]),
+  };
+}
+
 function nameFor(pos) {
   let best = null, bestD = 1.2;
   for (const nv of namedVec) {
@@ -351,7 +425,11 @@ function nameFor(pos) {
 }
 
 function onHover(e) {
-  if (mode !== "galaxy") { ui.tooltip.style.display = "none"; reticle.visible = false; return; }
+  if (mode === "system") {
+    reticle.visible = false;
+    hoverPlanet(e);
+    return;
+  }
   const hit = pickStar(e);
   if (!hit) { ui.tooltip.style.display = "none"; reticle.visible = false; return; }
 
@@ -368,9 +446,28 @@ function onHover(e) {
     : `<div class="name">Uncharted Star</div><div class="sub">${dist.toFixed(1)} pc from Sol · click to descend</div>`;
 }
 
+// In system view, name the planet under the cursor.
+function hoverPlanet(e) {
+  if (!systemGroup) { ui.tooltip.style.display = "none"; return; }
+  pointer.x = (e.clientX / window.innerWidth) * 2 - 1;
+  pointer.y = -(e.clientY / window.innerHeight) * 2 + 1;
+  raycaster.setFromCamera(pointer, camera);
+  raycaster.params.Points.threshold = 1;
+  const meshes = systemGroup.userData.planets.map((p) => p.mesh);
+  const hits = raycaster.intersectObjects(meshes, false);
+  if (!hits.length) { ui.tooltip.style.display = "none"; return; }
+  const p = hits[0].object;
+  ui.tooltip.style.display = "block";
+  ui.tooltip.style.left = e.clientX + 16 + "px";
+  ui.tooltip.style.top = e.clientY + 16 + "px";
+  ui.tooltip.innerHTML =
+    `<div class="name">${p.userData.name}</div>` +
+    `<div class="sub">orbit ${p.userData.a.toFixed(2)} AU</div>`;
+}
+
 function onClick(e) {
   if (mode === "system") return;
-  const hit = pickStar(e);
+  const hit = pickNearest(e);
   if (!hit) return;
   const nm = nameFor(hit.pos);
   descend(hit, nm);
@@ -382,9 +479,29 @@ function onSearch() {
   const q = ui.search.value.trim().toLowerCase();
   ui.results.innerHTML = "";
   if (!q) return;
+
+  // Real exoplanet systems first (these have confirmed planets to explore).
+  systems
+    .filter((s) => s.host.toLowerCase().includes(q))
+    .slice(0, 10)
+    .forEach((s) => {
+      const li = document.createElement("div");
+      li.className = "result";
+      li.innerHTML =
+        `<span>● ${s.host}</span><span class="con">${s.n} world${s.n > 1 ? "s" : ""}</span>`;
+      li.addEventListener("click", () => {
+        const pos = new THREE.Vector3(s.x, s.y, s.z);
+        descend({ index: -1, pos }, null, s);
+        ui.search.value = "";
+        ui.results.innerHTML = "";
+      });
+      ui.results.appendChild(li);
+    });
+
+  // Then bright named stars.
   named
     .filter((s) => s.name.toLowerCase().includes(q))
-    .slice(0, 14)
+    .slice(0, 10)
     .forEach((s) => {
       const li = document.createElement("div");
       li.className = "result";
@@ -401,7 +518,17 @@ function onSearch() {
 
 // --- descend into a star's system -----------------------------------------
 
-function descend(hit, nm) {
+// Find a real exoplanet system near a position (same parsec frame).
+function realSystemFor(pos) {
+  let best = null, bestD = 1.5;
+  for (const sv of systemVecs) {
+    const d = sv.v.distanceTo(pos);
+    if (d < bestD) { bestD = d; best = sv.sys; }
+  }
+  return best;
+}
+
+function descend(hit, nm, forcedSys) {
   mode = "system";
   reticle.visible = false;
   ui.tooltip.style.display = "none";
@@ -412,33 +539,41 @@ function descend(hit, nm) {
     target: controls.target.clone(),
   };
 
-  const color = hit.index >= 0
-    ? new THREE.Color(colArr[hit.index * 3], colArr[hit.index * 3 + 1], colArr[hit.index * 3 + 2])
-    : new THREE.Color(0xfff1c0);
+  const realSys = forcedSys || realSystemFor(hit.pos);
 
-  systemGroup = buildSystem(hit.pos, color, nm);
+  let color;
+  if (realSys && realSys.teff) color = kelvinToColor(realSys.teff);
+  else if (hit.index >= 0)
+    color = new THREE.Color(colArr[hit.index * 3], colArr[hit.index * 3 + 1], colArr[hit.index * 3 + 2]);
+  else color = new THREE.Color(0xfff1c0);
+
+  systemGroup = buildSystem(hit.pos, color, realSys);
   scene.add(systemGroup);
 
   // dim the rest of the heavens so the system reads clearly
-  if (points) points.material.uniforms.uDim.value = 0.25;
+  if (points) points.material.uniforms.uDim.value = 0.22;
   if (web) web.material.opacity = 0.04;
 
-  // fly the camera in close, slightly above the orbital plane
-  const offset = new THREE.Vector3(0, 14, 34);
+  // frame the whole system: fly to a distance that fits its outer orbit
+  const span = systemGroup.userData.span || 70;
+  const offset = new THREE.Vector3(0, span * 0.5, span * 1.15);
   flyTo(hit.pos, hit.pos.clone().add(offset), () => {
     controls.minDistance = 4;
-    controls.maxDistance = 260;
+    controls.maxDistance = span * 6;
   });
 
-  // update readout
-  const name = nm ? nm.name : "Uncharted Star";
-  ui.roTitle.textContent = name + " System";
+  // readout
+  const name = realSys ? realSys.host : nm ? nm.name : "Uncharted Star";
+  const real = !!realSys;
+  ui.roTitle.textContent = name + (name === "Sol" ? " — Our System" : " System");
   const planets = systemGroup.userData.planets.length;
   ui.roRows.innerHTML =
     `<div><span>Worlds</span><b>${planets}</b></div>` +
     `<div><span>Distance</span><b>${hit.pos.length().toFixed(1)} pc</b></div>` +
-    (nm ? `<div><span>Constellation</span><b>${nm.con || "—"}</b></div>` : "");
-  document.querySelector("#readout .label").textContent = "Stellar System";
+    `<div><span>Planets</span><b>${real ? "Real (confirmed)" : "Imagined"}</b></div>`;
+  document.querySelector("#readout .label").textContent = real
+    ? "Confirmed System"
+    : "Stellar System";
   ui.backBtn.classList.remove("hidden");
 }
 
@@ -468,8 +603,10 @@ function ascend() {
     `<div><span>Span</span><b>~2,000 parsecs</b></div>`;
 }
 
-// Build a clean procedural solar system, deterministic per star location.
-function buildSystem(pos, starColor, nm) {
+// Build a star system. If `realSys` is given, render its real (confirmed)
+// planets with their true relative ordering and sizes; otherwise generate a
+// clean procedural system, deterministic per star location.
+function buildSystem(pos, starColor, realSys) {
   const group = new THREE.Group();
   group.position.copy(pos);
   // gentle tilt so orbits read as 3D but stay clean circles
@@ -484,7 +621,7 @@ function buildSystem(pos, starColor, nm) {
   const rng = mulberry32(seed || 1);
 
   // central star
-  const starR = 2.4;
+  const starR = 2.6;
   const star = new THREE.Mesh(
     new THREE.SphereGeometry(starR, 32, 32),
     new THREE.MeshBasicMaterial({ color: starColor })
@@ -499,84 +636,131 @@ function buildSystem(pos, starColor, nm) {
       depthWrite: false,
     })
   );
-  starGlow.scale.set(starR * 9, starR * 9, 1);
+  starGlow.scale.set(starR * 10, starR * 10, 1);
   group.add(starGlow);
 
-  // subtle orbital-plane grid for futuristic orientation
+  // Decide orbit radii (scene units). Real systems are rescaled per-system on a
+  // log scale so wildly different real distances all read clearly.
+  const innerR = starR + 9;
+  const outerR = 78;
+  let specs; // {dispR, dispSize, color, name, speedR}
+
+  if (realSys && realSys.planets.length) {
+    const ps = realSys.planets;
+    const aMin = Math.log(ps[0].a);
+    const aMax = Math.log(ps[ps.length - 1].a);
+    const range = Math.max(1e-3, aMax - aMin);
+    specs = ps.map((p, i) => {
+      const f = ps.length === 1 ? 0.5 : (Math.log(p.a) - aMin) / range;
+      const dispR = innerR + f * (outerR - innerR);
+      const rjup = p.r || 0.18;
+      const dispSize = THREE.MathUtils.clamp(0.7 + 2.0 * Math.sqrt(rjup), 0.7, 4.2);
+      return {
+        dispR,
+        dispSize,
+        color: planetColor(rjup, i),
+        name: p.name,
+        a: p.a,
+        speedR: p.a, // real spacing drives relative speed (Kepler-ish)
+        ringed: rjup > 0.6 && rng() > 0.5,
+      };
+    });
+  } else {
+    const n = 3 + Math.floor(rng() * 5); // 3..7
+    specs = [];
+    let r = innerR;
+    for (let i = 0; i < n; i++) {
+      r += (outerR - innerR) / (n + 1) * (0.6 + rng() * 0.9);
+      const rjup = 0.1 + rng() * 1.4;
+      specs.push({
+        dispR: r,
+        dispSize: THREE.MathUtils.clamp(0.7 + 2.0 * Math.sqrt(rjup), 0.7, 4.2),
+        color: planetColor(rjup, i),
+        name: "Unnamed world",
+        a: r / 14,
+        speedR: r / 14,
+        ringed: rjup > 0.7 && rng() > 0.6,
+      });
+    }
+  }
+
+  // faint orbital-plane disc for orientation
   const grid = new THREE.Mesh(
-    new THREE.RingGeometry(starR + 1.5, 70, 96, 1),
+    new THREE.RingGeometry(starR + 2, outerR + 6, 96, 1),
     new THREE.MeshBasicMaterial({
-      color: 0x24407a,
-      transparent: true,
-      opacity: 0.05,
-      side: THREE.DoubleSide,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
+      color: 0x24407a, transparent: true, opacity: 0.05,
+      side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false,
     })
   );
   grid.rotation.x = Math.PI / 2;
   group.add(grid);
 
-  const planetPalette = [
-    0x9fd0ff, 0xff9a6c, 0xffe0a0, 0xc7a6ff, 0x7affc4, 0xff7ab0, 0xa0e6ff,
-  ];
-  const nPlanets = 3 + Math.floor(rng() * 5); // 3..7
   const planets = [];
-  let r = starR + 6;
-
-  for (let i = 0; i < nPlanets; i++) {
-    r += 5 + rng() * 8;
-    const pr = 0.5 + rng() * 1.4;
-    const col = planetPalette[Math.floor(rng() * planetPalette.length)];
-
-    // clean circular orbit ring
-    const ring = makeOrbitRing(r, 0x5e7bdc, 0.32);
-    group.add(ring);
+  for (let i = 0; i < specs.length; i++) {
+    const sp = specs[i];
+    group.add(makeOrbitRing(sp.dispR, 0x5e7bdc, 0.34));
 
     const planet = new THREE.Mesh(
-      new THREE.SphereGeometry(pr, 20, 20),
+      new THREE.SphereGeometry(sp.dispSize, 22, 22),
       new THREE.MeshStandardMaterial({
-        color: col,
-        emissive: col,
-        emissiveIntensity: 0.35,
-        roughness: 0.7,
-        metalness: 0.1,
+        color: sp.color, emissive: sp.color, emissiveIntensity: 0.4,
+        roughness: 0.7, metalness: 0.1,
       })
     );
-    // occasional ring world
-    if (rng() > 0.78) {
-      const pring = new THREE.Mesh(
-        new THREE.RingGeometry(pr * 1.5, pr * 2.4, 32),
+    planet.userData.name = sp.name;
+    planet.userData.a = sp.a;
+    if (sp.ringed) {
+      const pr = new THREE.Mesh(
+        new THREE.RingGeometry(sp.dispSize * 1.5, sp.dispSize * 2.4, 32),
         new THREE.MeshBasicMaterial({
-          color: col,
-          transparent: true,
-          opacity: 0.5,
-          side: THREE.DoubleSide,
-          blending: THREE.AdditiveBlending,
-          depthWrite: false,
+          color: sp.color, transparent: true, opacity: 0.5,
+          side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false,
         })
       );
-      pring.rotation.x = Math.PI / 2.3;
-      planet.add(pring);
+      pr.rotation.x = Math.PI / 2.3;
+      planet.add(pr);
     }
     group.add(planet);
 
     planets.push({
       mesh: planet,
-      radius: r,
+      radius: sp.dispR,
       angle: rng() * Math.PI * 2,
-      speed: (0.45 / Math.sqrt(r)) * (0.7 + rng() * 0.6), // inner = faster
+      speed: (0.9 / Math.pow(Math.max(sp.speedR, 0.02), 0.66)) * 0.18,
     });
   }
 
-  // a little light so planets are shaded, not flat
-  const light = new THREE.PointLight(0xffffff, 2.2, 400, 1.2);
+  const light = new THREE.PointLight(0xffffff, 2.4, 600, 1.1);
   group.add(light);
-  group.add(new THREE.AmbientLight(0x223055, 1.5));
+  group.add(new THREE.AmbientLight(0x2a3a60, 1.6));
 
   group.userData.planets = planets;
   group.userData.star = star;
+  group.userData.span = outerR;
   return group;
+}
+
+// Colour a planet by its size class (rocky / neptune / gas giant) with variety.
+function planetColor(rjup, i) {
+  const rocky = [0x9fb7d0, 0xc8a27a, 0xb0938a, 0x8fb39a];
+  const neptune = [0x6fb6ff, 0x7ad0e6, 0x8aa6ff];
+  const giant = [0xffcf9a, 0xffb27a, 0xe8c79a, 0xd9a066];
+  if (rjup < 0.35) return new THREE.Color(rocky[i % rocky.length]);
+  if (rjup < 0.7) return new THREE.Color(neptune[i % neptune.length]);
+  return new THREE.Color(giant[i % giant.length]);
+}
+
+// Approximate star colour from effective temperature (Kelvin).
+function kelvinToColor(t) {
+  const t100 = THREE.MathUtils.clamp(t, 1500, 40000) / 100;
+  let r, g, b;
+  if (t100 <= 66) { r = 255; g = 99.47 * Math.log(Math.max(t100, 1)) - 161.12; }
+  else { r = 329.7 * Math.pow(t100 - 60, -0.1332); g = 288.12 * Math.pow(t100 - 60, -0.0755); }
+  if (t100 >= 66) b = 255;
+  else if (t100 <= 19) b = 0;
+  else b = 138.52 * Math.log(t100 - 10) - 305.04;
+  const c = (v) => THREE.MathUtils.clamp(v, 0, 255) / 255;
+  return new THREE.Color(c(r), c(g), c(b));
 }
 
 function makeOrbitRing(radius, color, opacity) {
@@ -660,14 +844,15 @@ function animate() {
   }
 
   controls.update();
-  composer.render();
+  if (composer) composer.render();
+  else renderer.render(scene, camera);
 }
 
 function onResize() {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
-  composer.setSize(window.innerWidth, window.innerHeight);
+  if (composer) composer.setSize(window.innerWidth, window.innerHeight);
   if (points) points.material.uniforms.uScale.value = window.innerHeight / 2;
 }
 

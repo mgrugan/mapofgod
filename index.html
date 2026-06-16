@@ -286,7 +286,7 @@
 
     <div id="dock">
       <button id="backBtn" class="btn hidden">◄ Ascend to the Heavens</button>
-      <div id="hint" class="panel">Drag to behold · Scroll to draw near · <b>Click a star</b> to descend</div>
+      <div id="hint" class="panel"><b>Click any star</b> to descend · search <b>TRAPPIST-1</b>, <b>Kepler-90</b>, <b>Sol</b> for real worlds</div>
     </div>
 
     <div id="tooltip"></div>
@@ -295,6 +295,26 @@
       <div class="ring"></div>
       <span>Charting the heavens…</span>
     </div>
+
+    <!-- Safety net: this classic script runs even if the ES module fails to load
+         (e.g. when the file is opened directly via file://). -->
+    <script>
+      window.__APP_READY = false;
+      setTimeout(function () {
+        if (window.__APP_READY) return;
+        var el = document.getElementById("loading");
+        if (!el) return;
+        el.style.display = "flex";
+        el.innerHTML =
+          '<div style="max-width:560px;text-align:center;padding:24px;font-family:Rajdhani,system-ui,sans-serif">' +
+          '<div style="font-family:Orbitron,sans-serif;letter-spacing:3px;color:#ffd27a;margin-bottom:14px">THE HEAVENS HAVE NOT LOADED</div>' +
+          '<div style="color:#9fb0d8;font-size:15px;line-height:1.7">' +
+          "This page needs to be served over <b>http</b> — it won't run if you opened the file directly (<code>file://</code>).<br><br>" +
+          "From the project folder run:<br><code style=\"color:#9be8ff\">python3 -m http.server 8000</code><br>then open <code style=\"color:#9be8ff\">http://localhost:8000</code><br><br>" +
+          "Or deploy it free with GitHub Pages (see the README). A working internet connection is needed for the 3D engine." +
+          "</div></div>";
+      }, 8000);
+    </script>
 
     <script type="module" src="js/main.js"></script>
   </body>

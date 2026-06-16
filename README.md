@@ -57,12 +57,21 @@ star a sun with worlds", not a catalog of real exoplanets. Real exoplanet data
 ## Project layout
 
 ```
-index.html              The website (UI, styling, three.js import map)
-js/main.js              Scene setup, data loading, shaders, interaction
-data/stars.b64          Packed star data (float32: x,y,z, r,g,b, size)
-data/stars.json         Metadata + named bright stars (for labels/search)
-scripts/process_stars.py  Rebuilds the data files from the raw HYG catalog
+index.html                   The website (UI, styling, three.js import map)
+js/main.js                   Scene, data loading, shaders, web, dive, systems
+data/stars.b64               Packed star data (float32: x,y,z, r,g,b, size)
+data/stars.json              Metadata + named bright stars (for labels/search)
+data/systems.json            Real exoplanet systems + Sol (host position + planets)
+scripts/process_stars.py     Rebuilds the star data from the raw HYG catalog
+scripts/process_exoplanets.py  Rebuilds systems.json from the exoplanet catalogue
+.github/workflows/deploy-pages.yml  Auto-publishes the site to GitHub Pages
 ```
+
+## Deploying as a website (GitHub Pages)
+
+A workflow is included. In the repo, go to **Settings → Pages → Build and
+deployment → Source: GitHub Actions**. Push to the default branch and the map is
+published at your Pages URL — no server to run, and it works on any device.
 
 ## Regenerating the data
 
